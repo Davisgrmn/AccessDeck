@@ -1,0 +1,30 @@
+[Unit]
+Description=AccessDeck application and private PostgreSQL instance
+After=network.target
+# Task 2 can enable this unit before Task 3 uploads and builds the application.
+ConditionPathExists=/opt/accessdeck/dist/server/main.js
+
+[Service]
+Type=simple
+User=accessdeck
+Group=accessdeck
+WorkingDirectory=/opt/accessdeck
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=3000
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/local/bin/node /opt/accessdeck/scripts/start.mjs
+Restart=on-failure
+RestartSec=5
+# Let the launcher shut down Express and PostgreSQL before killing any leftovers.
+KillMode=mixed
+TimeoutStopSec=40
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/accessdeck/.env /opt/accessdeck/.local
+
+[Install]
+WantedBy=multi-user.target

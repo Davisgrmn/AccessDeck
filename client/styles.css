@@ -1,0 +1,12 @@
+:root { font-family: Inter, system-ui, sans-serif; color-scheme: dark; }
+html { scroll-behavior: smooth; }
+body { margin: 0; }
+.app-shell { min-height: 100vh; display: flex; flex-direction: column; background: #111222; color: #f4f3ff; }
+.brand { color: #f4f3ff; font-size: 1.5rem; font-weight: 750; letter-spacing: -.04em; }
+.brand span, .hero h1 span { color: #b3a2ff; }
+.hero { max-width: 860px; }
+.eyebrow { color: #b3a2ff; font-size: .75rem; letter-spacing: .12em; font-weight: 650; }
+.card { background: #1b1d31; border-color: #34364c; }
+.btn-primary { --bs-btn-bg: #7050d8; --bs-btn-border-color: #7050d8; --bs-btn-hover-bg: #6040c8; --bs-btn-hover-border-color: #6040c8; }
+a:focus-visible { outline: 3px solid #b3a2ff; outline-offset: 5px; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }

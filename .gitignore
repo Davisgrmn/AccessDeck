@@ -1,2 +1,24 @@
+# Private keys, credentials, and local account/session directories
 *.pem
+*.key
+*.p12
+*.pfx
 .env
+.env.*
+!.env.example
+.aws/
+.ssh/
+.codex/
+.agents/
+
+# Local assignment references and conversation export
+*.pdf
+*.docx
+/# Update 408 proposal scope.txt
+
+# Application dependencies, builds, and local data
+node_modules/
+dist/
+.local/
+coverage/
+*.log
