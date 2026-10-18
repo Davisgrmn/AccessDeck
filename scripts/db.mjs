@@ -4,7 +4,10 @@ import { pathToFileURL } from 'node:url';
 import pg from 'pg';
 import { root, settings, connectionString } from './runtime.mjs';
 
-export async function prepareDatabase(url) {
+export async function prepareDatabase(url, {
+  migrationsDirectory = join(root, 'db', 'migrations'),
+  seedFile = join(root, 'db', 'seed.sql'),
+} = {}) {
   const client = new pg.Client({ connectionString: url, connectionTimeoutMillis: 5000 });
   try {
     await client.connect();
@@ -12,22 +15,24 @@ export async function prepareDatabase(url) {
     // Serialize migration/seed work if two startup processes reach it together.
     await client.query('SELECT pg_advisory_xact_lock(408001)');
     await client.query('CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())');
-    const directory = join(root, 'db', 'migrations');
+    const directory = migrationsDirectory;
+    const appliedMigrations = [];
     for (const filename of (await readdir(directory)).filter((name) => name.endsWith('.sql')).sort()) {
       const applied = await client.query('SELECT 1 FROM schema_migrations WHERE version = $1', [filename]);
       if (applied.rowCount === 0) {
         await client.query(await readFile(join(directory, filename), 'utf8'));
         await client.query('INSERT INTO schema_migrations (version) VALUES ($1)', [filename]);
-        console.log('Applied migration: ' + filename);
+        appliedMigrations.push(filename);
       }
     }
-    await client.query(await readFile(join(root, 'db', 'seed.sql'), 'utf8'));
+    await client.query(await readFile(seedFile, 'utf8'));
     await client.query('COMMIT');
-    console.log('Database ready; demonstration plans are seeded.');
+    for (const filename of appliedMigrations) console.log('Applied migration: ' + filename);
+    console.log('Database ready; demonstration plans, organizations, features, and reports are seeded.');
   } catch (error) {
     try { await client.query('ROLLBACK'); } catch { /* Connection may have failed. */ }
     throw new Error('Database setup failed (' + (error.code || 'connection or SQL error') +
-      '). Check PostgreSQL availability and database permissions.');
+      '). Check PostgreSQL availability and database permissions.', { cause: error });
   } finally {
     await client.end();
   }

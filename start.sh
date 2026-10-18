@@ -13,8 +13,8 @@ for tool in node npm; do
   fi
 done
 
-if ! node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 12) ? 0 : 1)'; then
-  printf 'Missing prerequisite: Node.js 22.12 or newer (24 LTS recommended). See README.md.\n' >&2
+if ! node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major >= 24 || (major === 22 && minor >= 13) ? 0 : 1)'; then
+  printf 'Missing prerequisite: Node.js 24+ or 22.13+ on the 22.x line (24 LTS recommended). See README.md.\n' >&2
   exit 1
 fi
 

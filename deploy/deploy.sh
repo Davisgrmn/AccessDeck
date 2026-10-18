@@ -31,8 +31,8 @@ shift $((OPTIND - 1))
 for tool in node npm ssh rsync curl realpath; do
   command -v "$tool" >/dev/null 2>&1 || die "Missing local tool: $tool. See README.md."
 done
-node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(process.platform === "linux" && (major > 22 || (major === 22 && minor >= 12)) ? 0 : 1)' \
-  || die 'Use Linux Node.js 22.12+ (24 recommended). In WSL, load nvm and run nvm use 24.'
+node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(process.platform === "linux" && (major >= 24 || (major === 22 && minor >= 13)) ? 0 : 1)' \
+  || die 'Use Linux Node.js 24+ or 22.13+ on the 22.x line. In WSL, load nvm and run nvm use 24.'
 npm --version >/dev/null || die 'Use Linux npm in Ubuntu/WSL. Load nvm and run nvm use 24.'
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -59,6 +59,7 @@ trap 'printf "\nDeployment failed during %s. See the error above.\n" "$phase" >&
 
 printf '\nInstalling locked local dependencies and checking the project...\n'
 npm ci --include=dev --no-audit --no-fund
+npm run lint
 npm test
 npm run build
 
@@ -102,6 +103,7 @@ rsync -rlptz --safe-links --chmod=u+rwX,go+rX \
   --exclude='node_modules/' --exclude='dist/' --exclude='.local/' \
   --include='/package.json' --include='/package-lock.json' \
   --include='/tsconfig*.json' --include='/vite.config.ts' --include='/vitest.config.ts' \
+  --include='/eslint.config.mjs' \
   --include='/README.md' --include='/start.sh' \
   --include='/client/***' --include='/server/***' --include='/scripts/***' \
   --include='/db/***' --include='/tests/***' --include='/deploy/***' \

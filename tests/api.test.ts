@@ -26,6 +26,14 @@ describe('initial AccessDeck API', () => {
     expect(response.body).toEqual({ plans });
   });
 
+  it('returns public report samples', async () => {
+    const reports = [{ id: 1, organization_name: 'Pine Studio', title: 'Sample', sample_data: [] }];
+    const database: Database = { query: vi.fn().mockResolvedValue({ rows: reports }) };
+    const response = await request(createApp(database)).get('/api/demo/reports');
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ reports });
+  });
+
   it('returns a JSON 404 for unknown API routes', async () => {
     const database: Database = { query: vi.fn().mockResolvedValue({ rows: [] }) };
     const response = await request(createApp(database)).get('/api/missing');

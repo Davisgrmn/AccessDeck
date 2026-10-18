@@ -2,6 +2,7 @@
 html { scroll-behavior: smooth; }
 body { margin: 0; }
 .app-shell { min-height: 100vh; display: flex; flex-direction: column; background: #111222; color: #f4f3ff; }
+.skip-link { position: absolute; top: 0; left: 0; z-index: 10; }
 .brand { color: #f4f3ff; font-size: 1.5rem; font-weight: 750; letter-spacing: -.04em; }
 .brand span, .hero h1 span { color: #b3a2ff; }
 .hero { max-width: 860px; }

@@ -29,6 +29,17 @@ export function createApp(database: Database, frontendDirectory = fileURLToPath(
     response.json({ plans: result.rows });
   });
 
+  // Only explicitly public fixtures may appear on the public landing page.
+  app.get('/api/demo/reports', async (_request, response) => {
+    const result = await database.query(`
+      SELECT r.id, o.name AS organization_name, r.title, r.sample_data
+      FROM demo_reports r JOIN organizations o ON o.id = r.organization_id
+      WHERE o.is_demo = true AND r.is_public_demo = true
+      ORDER BY o.name, r.title
+    `);
+    response.json({ reports: result.rows });
+  });
+
   // Unknown API routes must not silently return the frontend HTML.
   app.use('/api', (_request, response) => {
     response.status(404).json({ error: 'API route not found' });
