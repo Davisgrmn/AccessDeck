@@ -15,6 +15,7 @@
     "test": "vitest run",
     "test:db": "vitest run tests/database.test.ts",
     "db:setup": "node scripts/db.mjs",
+    "manager:create": "node scripts/create-manager.mjs",
     "dev:client": "vite --host 127.0.0.1"
   },
   "dependencies": {

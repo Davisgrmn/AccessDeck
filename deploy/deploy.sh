@@ -132,10 +132,10 @@ sudo -n chmod 2750 /opt/accessdeck
 sudo -n -u accessdeck test -r /opt/accessdeck/dist/server/main.js
 sudo -n systemctl restart accessdeck.service
 
-printf '\nWaiting for the app and database through Nginx...\n'
+printf '\nWaiting for the app and database...\n'
 healthy=false
 for attempt in {1..30}; do
-  if curl --fail --silent --show-error --max-time 3 http://127.0.0.1/api/health > "$stage/health.json" 2>/dev/null \
+  if curl --fail --silent --show-error --max-time 3 http://127.0.0.1:3000/api/health > "$stage/health.json" 2>/dev/null \
     && node -e 'const h=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")); process.exit(h.status === "ok" && h.database === "connected" ? 0 : 1)' "$stage/health.json" 2>/dev/null; then
     healthy=true
     break
@@ -154,9 +154,9 @@ REMOTE
 
 phase='public HTTP checks'
 printf '\nChecking the public health endpoint and landing page...\n'
-if ! curl --fail --silent --show-error --max-time 10 "http://$host/api/health" > "$local_tmp/health.json"; then
+if ! curl --fail --location --silent --show-error --max-time 10 "http://$host/api/health" > "$local_tmp/health.json"; then
   die 'The app passed its server health check, but public HTTP failed. Check the EC2 security group allows TCP port 80.'
 fi
 node -e 'const h=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")); process.exit(h.status === "ok" && h.database === "connected" ? 0 : 1)' "$local_tmp/health.json"
-curl --fail --silent --show-error --max-time 10 "http://$host/" >/dev/null
+curl --fail --location --silent --show-error --max-time 10 "http://$host/" >/dev/null
 printf '\nAccessDeck deployed successfully. Open http://%s/\n' "$host"

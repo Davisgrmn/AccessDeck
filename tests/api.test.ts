@@ -40,4 +40,15 @@ describe('initial AccessDeck API', () => {
     expect(response.status).toBe(404);
     expect(response.body).toEqual({ error: 'API route not found' });
   });
+
+  it('rejects malformed and oversized JSON without exposing parser details', async () => {
+    const database: Database = { query: vi.fn().mockResolvedValue({ rows: [] }) };
+    const app = createApp(database);
+    const malformed = await request(app).post('/api/auth/login').set('Content-Type', 'application/json').send('{bad');
+    expect(malformed.status).toBe(400);
+    expect(malformed.body).toEqual({ error: 'The submitted JSON is invalid.' });
+    const oversized = await request(app).post('/api/auth/login').send({ password: 'a'.repeat(20000) });
+    expect(oversized.status).toBe(413);
+    expect(oversized.body).toEqual({ error: 'The submitted form is too large.' });
+  });
 });

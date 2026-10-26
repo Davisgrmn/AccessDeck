@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../server/app.js';
 import { prepareDatabase } from '../scripts/db.mjs';
 import { postgresTools, root } from '../scripts/runtime.mjs';
+import { provisionManager } from '../server/accounts.js';
 
 // Always create a separate cluster; never load .env or connect to the app database.
 let directory: string;
@@ -89,7 +90,7 @@ describe('core PostgreSQL migrations and fixtures', () => {
     await prepareDatabase(databaseUrl);
     const tables = (await pool.query("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename")).rows;
     expect(tables.map((row) => row.tablename)).toEqual([
-      'audit_logs', 'demo_reports', 'features', 'organizations', 'plan_entitlements', 'plan_versions',
+      'audit_logs', 'auth_rate_limits', 'auth_sessions', 'demo_reports', 'features', 'organizations', 'plan_entitlements', 'plan_versions',
       'plans', 'schema_migrations', 'subscriptions', 'usage_events', 'usage_periods', 'users',
     ]);
     for (const [table, count] of Object.entries({ organizations: 3, users: 4, plans: 3, plan_versions: 3,
@@ -97,7 +98,7 @@ describe('core PostgreSQL migrations and fixtures', () => {
       expect(Number((await pool.query(`SELECT count(*) FROM ${table}`)).rows[0].count)).toBe(count);
     }
     const migrations = (await pool.query('SELECT version FROM schema_migrations ORDER BY version')).rows;
-    expect(migrations.map((row) => row.version)).toEqual(['001_initial_plans.sql', '002_core_schema.sql']);
+    expect(migrations.map((row) => row.version)).toEqual(['001_initial_plans.sql', '002_core_schema.sql', '003_accounts_and_sessions.sql']);
     expect((await pool.query('SELECT id FROM users WHERE is_active OR password_hash IS NOT NULL')).rows).toEqual([]);
     expect((await pool.query('SELECT * FROM usage_events')).rows).toEqual([]);
   });
@@ -116,7 +117,7 @@ describe('core PostgreSQL migrations and fixtures', () => {
       const plan = (await client.query("SELECT p.id,p.description,v.export_limit FROM plans p JOIN plan_versions v ON v.plan_id=p.id WHERE p.name='Pro'")).rows[0];
       expect(plan).toEqual({ id: before, description: 'Existing edited plan', export_limit: 42 });
       expect((await client.query("SELECT name FROM plans WHERE name='Custom'")).rows).toHaveLength(1);
-      expect(Number((await client.query('SELECT count(*) FROM schema_migrations')).rows[0].count)).toBe(2);
+      expect(Number((await client.query('SELECT count(*) FROM schema_migrations')).rows[0].count)).toBe(3);
       expect(Number((await client.query('SELECT count(*) FROM demo_reports')).rows[0].count)).toBe(6);
     } finally {
       await client.end();
@@ -133,7 +134,7 @@ describe('core PostgreSQL migrations and fixtures', () => {
       expect((await pool.query("SELECT description FROM plans WHERE name='Pro'")).rows[0].description).toBe('Preserve my edits');
       expect((await pool.query("SELECT used_count FROM usage_periods WHERE organization_id=(SELECT id FROM organizations WHERE slug='summit-analytics')")).rows[0].used_count).toBe(3);
       for (const [table, count] of Object.entries({ plans: 3, plan_versions: 3, organizations: 3, users: 4,
-        features: 3, plan_entitlements: 9, subscriptions: 3, usage_periods: 3, demo_reports: 6, schema_migrations: 2 })) {
+        features: 3, plan_entitlements: 9, subscriptions: 3, usage_periods: 3, demo_reports: 6, schema_migrations: 3 })) {
         expect(Number((await pool.query(`SELECT count(*) FROM ${table}`)).rows[0].count)).toBe(count);
       }
     } finally {
@@ -215,3 +216,168 @@ describe('core PostgreSQL migrations and fixtures', () => {
     expect(Number((await pool.query('SELECT count(*) FROM demo_reports')).rows[0].count)).toBe(6);
   });
 });
+
+describe('accounts, persistent sessions, and authorization with PostgreSQL', () => {
+  const password = 'Checkpoint two password!';
+  let app: ReturnType<typeof createApp>;
+
+  beforeAll(() => { app = createApp(pool); });
+
+  async function browserSession() {
+    const agent = request.agent(app);
+    const response = await agent.get('/api/auth/session');
+    expect(response.status).toBe(200);
+    return { agent, csrf: response.body.csrfToken as string, cookie: response.headers['set-cookie'][0].split(';')[0] };
+  }
+
+  async function register(email: string, organizationName = 'Same organization name') {
+    const browser = await browserSession();
+    const response = await browser.agent.post('/api/auth/register').set('X-CSRF-Token', browser.csrf)
+      .send({ name: 'Test Customer', email, password, organizationName });
+    expect(response.status).toBe(201);
+    return { ...browser, csrf: response.body.csrfToken, user: response.body.user, cookie: response.headers['set-cookie'][0].split(';')[0], oldCookie: browser.cookie };
+  }
+
+  it('atomically creates a customer, separate organization, Free subscription, and private report', async () => {
+    const browser = await register('  First.Customer@Example.test  ', 'First private organization');
+    expect(browser.user).toMatchObject({ role: 'customer', email: 'first.customer@example.test', organization_name: 'First private organization' });
+    expect(browser.user).not.toHaveProperty('password_hash');
+    const account = (await pool.query('SELECT password_hash,is_active FROM users WHERE id=$1', [browser.user.id])).rows[0];
+    expect(account.is_active).toBe(true);
+    expect(account.password_hash).toMatch(/^scrypt\$[a-f0-9]{32}\$[a-f0-9]{128}$/);
+    expect(account.password_hash).not.toContain(password);
+    const workspace = await browser.agent.get(`/api/organizations/${browser.user.organization_id}`);
+    expect(workspace.status).toBe(200);
+    expect(workspace.body.organization).toMatchObject({ name: 'First private organization', plan_name: 'Free', export_limit: 0, used_count: 0 });
+    expect(workspace.body.reports).toHaveLength(1);
+    const publicReports = await request(app).get('/api/demo/reports');
+    expect(publicReports.body.reports).toHaveLength(6);
+    expect(publicReports.text).not.toContain('First private organization');
+    expect(browser.cookie).not.toBe(browser.oldCookie);
+    expect((await request(app).get('/api/dashboard').set('Cookie', browser.oldCookie)).status).toBe(401);
+    const hash = createHashForCookie(browser.cookie);
+    expect((await pool.query('SELECT token_hash FROM auth_sessions WHERE user_id=$1', [browser.user.id])).rows[0].token_hash).toBe(hash);
+  });
+
+  it('validates registration and rolls back duplicate-email registrations without leaving an organization', async () => {
+    const browser = await browserSession();
+    const invalid = await browser.agent.post('/api/auth/register').set('X-CSRF-Token', browser.csrf).send({ name: '', email: 'bad', password: 'short', organizationName: '' });
+    expect(invalid.status).toBe(400);
+    expect(Object.keys(invalid.body.fields).sort()).toEqual(['email', 'name', 'organizationName', 'password']);
+    const before = Number((await pool.query('SELECT count(*) FROM organizations')).rows[0].count);
+    const duplicate = await browser.agent.post('/api/auth/register').set('X-CSRF-Token', browser.csrf)
+      .send({ name: 'Duplicate', email: 'FIRST.CUSTOMER@example.test', password, organizationName: 'Must roll back' });
+    expect(duplicate.status).toBe(409);
+    expect(Number((await pool.query('SELECT count(*) FROM organizations')).rows[0].count)).toBe(before);
+  });
+
+  it('rejects manager/organization injection and missing or foreign CSRF tokens', async () => {
+    const browser = await browserSession();
+    const stranger = await browserSession();
+    const form = { name: 'Attacker', email: 'attacker@example.test', password, organizationName: 'Attacker organization' };
+    expect((await browser.agent.post('/api/auth/register').send(form)).status).toBe(403);
+    expect((await browser.agent.post('/api/auth/register').set('X-CSRF-Token', stranger.csrf).send(form)).status).toBe(403);
+    for (const injected of [{ role: 'product_manager' }, { organization_id: 1 }]) {
+      expect((await browser.agent.post('/api/auth/register').set('X-CSRF-Token', browser.csrf).send({ ...form, ...injected })).status).toBe(400);
+    }
+    expect((await pool.query("SELECT id FROM users WHERE email='attacker@example.test'")).rows).toEqual([]);
+  });
+
+  it('enforces organization boundaries even for equal names and direct URL/query tampering', async () => {
+    const alice = await register('alice@example.test');
+    const bob = await register('bob@example.test');
+    expect(alice.user.organization_id).not.toBe(bob.user.organization_id);
+    const own = await alice.agent.get(`/api/organizations/${alice.user.organization_id}?organization_id=${bob.user.organization_id}`);
+    expect(own.status).toBe(200);
+    expect(own.body.organization.id).toBe(alice.user.organization_id);
+    expect((await alice.agent.get(`/api/organizations/${bob.user.organization_id}`)).status).toBe(403);
+    expect((await alice.agent.get('/api/manager/organizations?role=product_manager')).status).toBe(403);
+    expect((await request(app).get(`/api/organizations/${alice.user.organization_id}`)).status).toBe(401);
+    expect((await request(app).get('/api/manager/organizations')).status).toBe(401);
+  });
+
+  it('provisions managers separately, grants cross-organization access, and refuses customer promotion', async () => {
+    await provisionManager(pool, 'Test Manager', 'manager@example.test', password);
+    await expect(provisionManager(pool, 'Overwrite', 'alice@example.test', password)).rejects.toThrow('active account or a customer');
+    await expect(provisionManager(pool, 'Overwrite', 'manager@example.test', password)).rejects.toThrow('active account or a customer');
+    const browser = await browserSession();
+    const login = await browser.agent.post('/api/auth/login').set('X-CSRF-Token', browser.csrf).send({ email: 'MANAGER@example.test', password });
+    expect(login.status).toBe(200);
+    expect(login.body.user).toMatchObject({ role: 'product_manager', organization_id: null });
+    expect(login.text).not.toContain('password_hash');
+    const list = await browser.agent.get('/api/manager/organizations');
+    expect(list.status).toBe(200);
+    expect(list.body.organizations.length).toBeGreaterThan(3);
+    for (const organization of list.body.organizations) {
+      expect((await browser.agent.get(`/api/organizations/${organization.id}`)).status).toBe(200);
+    }
+    expect((await browser.agent.get('/api/dashboard')).body.summary.organizations).toBe(list.body.organizations.length);
+  }, 15000);
+
+  it('rejects wrong/unknown/inactive credentials with the same error and signs in case-insensitively', async () => {
+    const browser = await browserSession();
+    for (const [email, suppliedPassword] of [['unknown@example.test', password], ['first.customer@example.test', 'incorrect'], ['pine.customer@example.test', password]]) {
+      const response = await browser.agent.post('/api/auth/login').set('X-CSRF-Token', browser.csrf).send({ email, password: suppliedPassword });
+      expect(response.status).toBe(401);
+      expect(response.body).toEqual({ error: 'Email or password is incorrect.' });
+    }
+    const login = await browser.agent.post('/api/auth/login').set('X-CSRF-Token', browser.csrf).send({ email: 'FIRST.Customer@example.test', password });
+    expect(login.status).toBe(200);
+    expect(login.body.user.role).toBe('customer');
+    expect(login.body.csrfToken).not.toBe(browser.csrf);
+  });
+
+  it('keeps sessions across application recreation and startup migrations, then revokes them on sign-out', async () => {
+    const browser = await register('persistent@example.test');
+    await prepareDatabase(databaseUrl);
+    const restarted = createApp(pool);
+    const session = await request(restarted).get('/api/auth/session').set('Cookie', browser.cookie);
+    expect(session.status).toBe(200);
+    expect(session.body.user.id).toBe(browser.user.id);
+    expect(session.body.csrfToken).toBe(browser.csrf);
+    expect(session.headers['cache-control']).toBe('no-store');
+    expect((await browser.agent.post('/api/auth/logout').send({})).status).toBe(403);
+    expect((await browser.agent.get('/api/dashboard')).status).toBe(200);
+    const logout = await browser.agent.post('/api/auth/logout').set('X-CSRF-Token', browser.csrf).send({});
+    expect(logout.status).toBe(204);
+    expect((await request(restarted).get('/api/dashboard').set('Cookie', browser.cookie)).status).toBe(401);
+    expect((await browser.agent.get('/api/auth/session')).body.user).toBeNull();
+  });
+
+  it('expires sessions on the server and immediately blocks disabled users', async () => {
+    const expired = await register('expired@example.test');
+    await pool.query("UPDATE auth_sessions SET expires_at=now()-interval '1 minute' WHERE user_id=$1", [expired.user.id]);
+    expect((await expired.agent.get('/api/dashboard')).status).toBe(401);
+    const disabled = await register('disabled@example.test');
+    await pool.query('UPDATE users SET is_active=false WHERE id=$1', [disabled.user.id]);
+    expect((await disabled.agent.get('/api/dashboard')).status).toBe(401);
+    expect((await disabled.agent.get('/api/auth/session')).body.user).toBeNull();
+  });
+
+  it('uses HttpOnly/SameSite cookies and marks HTTPS or explicitly enforced cookies Secure', async () => {
+    const plain = await request(app).get('/api/auth/session');
+    expect(plain.headers['set-cookie'][0]).toContain('HttpOnly');
+    expect(plain.headers['set-cookie'][0]).toContain('SameSite=Lax');
+    const secure = await request(createApp(pool, undefined, { secureCookies: true })).get('/api/auth/session');
+    expect(secure.headers['set-cookie'][0]).toContain('; Secure');
+    const proxied = await request(app).get('/api/auth/session').set('X-Forwarded-Proto', 'https');
+    expect(proxied.headers['set-cookie'][0]).toContain('; Secure');
+  });
+
+  it('throttles repeated authentication attempts with a persistent database counter', async () => {
+    const browser = await browserSession();
+    for (let attempt = 0; attempt < 15; attempt++) {
+      expect((await browser.agent.post('/api/auth/login').set('X-CSRF-Token', browser.csrf).send({ email: 'throttle@example.test', password: 123 })).status).toBe(400);
+    }
+    const limited = await browser.agent.post('/api/auth/login').set('X-CSRF-Token', browser.csrf).send({ email: 'throttle@example.test', password });
+    expect(limited.status).toBe(429);
+    expect(limited.headers['retry-after']).toBe('900');
+    const restarted = await request(createApp(pool)).post('/api/auth/login').set('Cookie', browser.cookie)
+      .set('X-CSRF-Token', browser.csrf).send({ email: 'throttle@example.test', password });
+    expect(restarted.status).toBe(429);
+  });
+});
+
+function createHashForCookie(cookie: string) {
+  return createHash('sha256').update(cookie.split('=')[1]).digest('hex');
+}

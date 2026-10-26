@@ -10,4 +10,6 @@ body { margin: 0; }
 .card { background: #1b1d31; border-color: #34364c; }
 .btn-primary { --bs-btn-bg: #7050d8; --bs-btn-border-color: #7050d8; --bs-btn-hover-bg: #6040c8; --bs-btn-hover-border-color: #6040c8; }
 a:focus-visible { outline: 3px solid #b3a2ff; outline-offset: 5px; }
+.account-panel { max-width: 480px; }
+input:focus-visible, button:focus-visible, select:focus-visible { outline: 3px solid #b3a2ff; outline-offset: 3px; }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }

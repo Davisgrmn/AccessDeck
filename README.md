@@ -49,4 +49,29 @@ npm test
 ```
 
 Tests include a temporary PostgreSQL instance and leave your application database
-untouched. The landing page shows public fictional report samples from the seed data.
+untouched. They cover authentication, sessions, role checks, and organization isolation.
+
+## Accounts and pages
+
+- `/register`: create a customer account and a new organization on the Free plan.
+- `/login`: sign in; use **Sign out** in the header to end the session.
+- `/dashboard`: customer or manager summary and role-specific navigation.
+- `/organization`: the signed-in customer's subscription and private report previews.
+- `/manage`: manager-only organization list; **View organization** opens its workspace.
+
+Registration never grants manager permissions or joins an existing organization by
+name. The backend checks roles and organization ownership on every protected request.
+Public report samples on `/` are explicitly fictional; registered organizations'
+reports remain private. Sessions are stored in PostgreSQL, expire after 12 hours,
+and survive application restarts. Passwords use salted scrypt hashes.
+
+Create a manager in a **second local terminal while the app is running**:
+
+```bash
+npm run manager:create
+```
+
+Enter a name, email, and a password of 12–128 characters at the prompts. Password
+entry is hidden. This command can activate the inactive `manager@example.test`
+fixture or create a new manager; it refuses to overwrite active accounts or promote
+customers. Seeded customer accounts are inactive and have no default passwords.
